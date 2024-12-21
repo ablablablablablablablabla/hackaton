@@ -1,116 +1,66 @@
+# main.py
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import List, Optional, Dict
 import re
 import requests
 from bs4 import BeautifulSoup
 import time
-from typing import List, Dict, Optional
 from datetime import datetime
 
-
-class TrackParams:
-    def __init__(self, length=None, time=None, height=None, lighting=None,
-                 snow=None, lift_type=None, capacity=None, difficulty=None):
-        self.length = length
-        self.time = time
-        self.height = height
-        self.lighting = lighting
-        self.snow = snow
-        self.lift_type = lift_type
-        self.capacity = capacity
-        self.difficulty = difficulty
-
-    def to_dict(self):
-        params = {
-            'длина': self.length,
-            'время': self.time,
-            'высота': self.height,
-            'освещение': self.lighting,
-            'снег': self.snow,
-            'тип_подъемника': self.lift_type,
-            'вместимость': self.capacity,
-            'сложность': self.difficulty
-        }
-        # Фильтруем пустые значения
-        return {k: v for k, v in params.items()
-                if v and v != "Не указано" and v != "None" and v != "null"}
+# Создаем экземпляр FastAPI
+app = FastAPI(
+    title="Горнолыжный курорт API",
+    description="API для получения информации о трассах и зонах горнолыжного курорта",
+    version="1.0.0"
+)
 
 
-class Track:
-    def __init__(self, name: str, number: str, params: TrackParams, status: str, url: str = None):
-        self.name = name
-        self.number = number
-        self.params = params
-        self.status = status
-        self.url = url
+# Тот же код моделей и функций что и раньше...
+# Pydantic модели для валидации данных
+class TrackParams(BaseModel):
+    length: Optional[str] = None
+    time: Optional[str] = None
+    height: Optional[str] = None
+    lighting: Optional[str] = None
+    snow: Optional[str] = None
+    difficulty: Optional[str] = None
 
     def to_dict(self):
-        result = {
-            'название': self.name,
-            'номер': self.number,
-            'параметры': self.params.to_dict(),
-            'статус': self.status,
-            'ссылка': self.url
-        }
-
-        # Фильтруем пустые значения и "Не указано"
-        filtered_result = {k: v for k, v in result.items()
-                           if v and v != "Не указано" and v != "None" and v != "null"}
-
-        # Особая обработка для параметров
-        if 'параметры' in filtered_result and not filtered_result['параметры']:
-            del filtered_result['параметры']
-
-        return filtered_result
+        return {k: v for k, v in self.dict().items() if v is not None}
 
 
-def print_track(track_data: dict) -> None:
-    """Выводит информацию о трассе"""
-    print("\n" + "=" * 50)
+class Track(BaseModel):
+    name: str
+    number: str
+    params: Optional[TrackParams]
+    status: str
+    url: Optional[str] = None
+    updated_at: datetime = datetime.now()
 
-    if 'название' in track_data:
-        print(f"Название: {track_data['название']}")
-    if 'номер' in track_data:
-        print(f"Номер: {track_data['номер']}")
-
-    if 'параметры' in track_data and track_data['параметры']:
-        print("\nПараметры:")
-        params = track_data['параметры']
-        for key, value in params.items():
-            print(f"  {key.replace('_', ' ').title()}: {value}")
-
-    if 'статус' in track_data:
-        print(f"\nСтатус: {track_data['статус']}")
-
-    print("=" * 50)
+    def to_dict(self):
+        result = self.dict(exclude_none=True)
+        if 'params' in result and result['params']:
+            result['params'] = self.params.to_dict()
+        return result
 
 
-def print_zone(zone_data: dict) -> None:
-    """Выводит информацию о зоне"""
-    print("\n" + "=" * 80)
-    print(f"ЗОНА: {zone_data['название']}")
-    print("=" * 80)
-
-    if 'трассы' in zone_data:
-        print(f"\nВсего трасс/подъемников: {len(zone_data['трассы'])}")
-        for track in zone_data['трассы']:
-            print_track(track)
-
-    print("\n" + "=" * 80)
+class Zone(BaseModel):
+    name: str
+    url: str
+    tracks: List[Track]
 
 
-def parse_tracks(url: str, season: str = 'winter') -> List[Track]:
+async def parse_tracks(url: str, season: str = 'winter') -> List[Track]:
     base_url = 'https://ski-gv.ru'
     try:
-        print(f"\nПолучаем трассы/подъемники с URL: {url}")
-        print(f"Сезон: {'лето' if season == 'summer' else 'зима'}")
-
         response = requests.get(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
         tracks_data = []
-
         tracks = soup.find_all(['div'], class_=['scheme-select__option track-option', 'track-option'])
-        print(f"Найдено объектов: {len(tracks)}")
 
         for track in tracks:
             track_name_elem = track.find('div', class_='track-option__name')
@@ -121,7 +71,7 @@ def parse_tracks(url: str, season: str = 'winter') -> List[Track]:
             number_elem = track.find('div', class_='track-option__number')
             number = number_elem.text.strip() if number_elem else "Не указано"
 
-            # Улучшенное определение сложности
+            # Определение сложности
             difficulty = "Не указано"
             if number_elem and number_elem.get('class'):
                 classes = number_elem['class']
@@ -134,25 +84,8 @@ def parse_tracks(url: str, season: str = 'winter') -> List[Track]:
                 elif any('track-option__number_style_4' in c for c in classes):
                     difficulty = 'Очень сложная'
 
-            # Если не удалось определить по классам, пробуем определить по номеру
-            if difficulty == "Не указано" and number != "Не указано":
-                try:
-                    track_num = int(number)
-                    if track_num <= 4:
-                        difficulty = 'Простая'
-                    elif track_num <= 8:
-                        difficulty = 'Средняя'
-                    elif track_num <= 12:
-                        difficulty = 'Сложная'
-                    else:
-                        difficulty = 'Очень сложная'
-                except (ValueError, TypeError):
-                    difficulty = 'Средняя'  # Значение по умолчанию
-
-            # Параметры
-            length = time = height = lighting = snow = capacity = lift_type = None
-
-            # Ищем все параметры
+            # Параметры трассы
+            params = {}
             params_elems = track.find_all(['span'], class_=['track-param'])
 
             for param in params_elems:
@@ -162,79 +95,56 @@ def parse_tracks(url: str, season: str = 'winter') -> List[Track]:
                     param_text = param.text.strip()
 
                     if 'icon_image_track-length' in classes:
-                        length = param_text
+                        params['length'] = param_text
                     elif 'icon_image_clock' in classes or 'icon_image_hourglass' in classes:
-                        time = param_text
+                        params['time'] = param_text
                     elif 'icon_image_track-height' in classes:
-                        height = param_text
+                        params['height'] = param_text
                     elif 'icon_image_lamp' in classes:
-                        lighting = param_text
+                        params['lighting'] = param_text
                     elif 'icon_image_snowmachine' in classes:
-                        snow = param_text
-                    elif 'icon_image_cabine' in classes:
-                        lift_type = param_text
-                    elif 'icon_image_people' in classes:
-                        capacity = param_text
+                        params['snow'] = param_text
+
+            params['difficulty'] = difficulty
 
             status_elem = track.find('p', class_='track-status')
             status = status_elem.text.strip() if status_elem else "Статус неизвестен"
 
-            # Ссылка на подъемник
             info_button = track.find('a', class_='button button_style_default button_type_2')
             lift_url = base_url + info_button['href'] if info_button else None
-
-            track_params = TrackParams(
-                length=length,
-                time=time,
-                height=height,
-                lighting=lighting,
-                snow=snow,
-                lift_type=lift_type,
-                capacity=capacity,
-                difficulty=difficulty
-            )
 
             track_data = Track(
                 name=track_name,
                 number=number,
-                params=track_params,
+                params=TrackParams(**params),
                 status=status,
                 url=lift_url
             )
-
-            print(f"\nИнформация о трассе/подъемнике:")
-            print_track(track_data.to_dict())
 
             tracks_data.append(track_data)
 
         return tracks_data
 
     except requests.RequestException as e:
-        print(f"Ошибка при выполнении запроса: {str(e)}")
-        return []
+        raise HTTPException(status_code=500, detail=f"Ошибка при выполнении запроса: {str(e)}")
 
 
-def get_zones(season: str = 'winter'):
-    print(f"\nПолучаем информацию о зонах для сезона: {'лето' if season == 'summer' else 'зима'}")
+async def get_zones(season: str = 'winter') -> List[Zone]:
     base_url = 'https://ski-gv.ru'
-
     session = requests.Session()
     session.cookies.set('season', season, domain='ski-gv.ru')
 
     try:
-        print("\nОтправляем запрос к главной странице...")
         response = session.get(base_url)
         if not response.ok:
-            print(f"Ошибка при запросе: {response.status_code}")
-            return None
+            raise HTTPException(status_code=response.status_code,
+                                detail="Ошибка при запросе к главной странице")
 
         main_url = f"{base_url}/hills/1/1/"
-        print(f"Используем URL: {main_url}")
-
         response = session.get(main_url)
         if not response.ok:
-            print(f"Ошибка при запросе зон: {response.status_code}")
-            return None
+            raise HTTPException(status_code=response.status_code,
+                                detail="Ошибка при запросе зон")
 
         soup = BeautifulSoup(response.text, 'html.parser')
         zones = soup.find_all('a', class_=['gv-select__option option', 'gv-selectoption option'])
@@ -245,48 +155,106 @@ def get_zones(season: str = 'winter'):
                 zones = gv_select.find_all('a', class_='option')
 
         if not zones:
-            print("Зоны не найдены")
-            return None
+            raise HTTPException(status_code=404, detail="Зоны не найдены")
 
-        print(f"\nНайдено зон: {len(zones)}")
         zones_data = []
-
         for zone in zones:
             zone_name = zone.text.strip()
             if '(' in zone_name:
                 zone_name = zone_name.split('(')[0].strip()
 
             zone_url = base_url + zone['href']
+            tracks = await parse_tracks(zone_url, season)
 
-            print(f"\nОбрабатываем зону: {zone_name}")
-            print(f"Ссылка на зону: {zone_url}")
-
-            tracks = parse_tracks(zone_url, season)
-
-            zone_data = {
-                'название': zone_name,
-                'ссылка': zone_url,
-                'трассы': [track.to_dict() for track in tracks]
-            }
-
+            zone_data = Zone(
+                name=zone_name,
+                url=zone_url,
+                tracks=tracks
+            )
             zones_data.append(zone_data)
-            print(f"Завершена обработка зоны: {zone_name}")
-            print("-" * 50)
-
             time.sleep(1)
 
         return zones_data
 
     except requests.RequestException as e:
-        print(f"Ошибка при выполнении запроса: {str(e)}")
-        return None
+        raise HTTPException(status_code=500, detail=f"Ошибка при выполнении запроса: {str(e)}")
 
 
-if __name__ == "__main__":
-    print("=== Работа со склоном ===")
-    print("\n1. Получение информации о всех зонах...")
-    zones = get_zones(season='winter')
-    if zones:
-        print("\nСписок всех зон и трасс:")
-        for zone in zones:
-            print_zone(zone)
+# Эндпоинты API
+@app.get("/", response_model=dict)
+async def root():
+    """
+    Корневой эндпоинт с информацией об API
+    """
+    return {
+        "название": "API горнолыжного курорта",
+        "версия": "1.0.0",
+        "эндпоинты": [
+            "/zones - Получение информации о всех зонах",
+            "/zones/{zone_name} - Получение информации о конкретной зоне",
+            "/tracks - Получение информации о всех трассах"
+        ]
+    }
+
+
+@app.get("/zones", response_model=List[Zone])
+async def get_all_zones(
+        season: str = Query("winter", enum=["winter", "summer"],
+                            description="Сезон (winter/summer)")
+):
+    """
+    Получение информации о всех зонах курорта
+    """
+    return await get_zones(season)
+
+
+@app.get("/zones/{zone_name}", response_model=Zone)
+async def get_zone_by_name(
+        zone_name: str,
+        season: str = Query("winter", enum=["winter", "summer"])
+):
+    """
+    Получение информации о конкретной зоне по её названию
+    """
+    zones = await get_zones(season)
+    for zone in zones:
+        if zone.name.lower() == zone_name.lower():
+            return zone
+    raise HTTPException(status_code=404, detail=f"Зона '{zone_name}' не найдена")
+
+
+@app.get("/tracks", response_model=List[Track])
+async def get_all_tracks(
+        season: str = Query("winter", enum=["winter", "summer"]),
+        difficulty: Optional[str] = Query(None, enum=["Простая", "Средняя", "Сложная", "Очень сложная"])
+):
+    """
+    Получение информации о всех трассах с возможностью фильтрации по сложности
+    """
+    zones = await get_zones(season)
+    all_tracks = []
+    for zone in zones:
+        all_tracks.extend(zone.tracks)
+
+    if difficulty:
+        all_tracks = [track for track in all_tracks
+                      if track.params and track.params.difficulty == difficulty]
+
+    return all_tracks
+
+
+# Обработчики ошибок
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Внутренняя ошибка сервера: {str(exc)}"}
+    )
