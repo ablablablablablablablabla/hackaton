@@ -3,8 +3,7 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel
 from typing import Optional
 import requests
-import webbrowser
-from threading import Thread
+import uvicorn
 
 app = FastAPI(title="Ski Resort Weather API")
 
@@ -17,7 +16,7 @@ class WeatherData(BaseModel):
     sunset: Optional[str] = None
     humidity: Optional[str] = None
     pressure: Optional[str] = None
-    icon_url: Optional[str] = None  # Добавляем поле для URL иконки
+    icon_url: Optional[str] = None
 
 
 async def fetch_weather_data() -> WeatherData:
@@ -73,7 +72,6 @@ async def fetch_weather_data() -> WeatherData:
                     name = param_items[0].text.strip().lower()
                     value = param_items[1].text.strip()
 
-                    # Маппинг параметров на поля класса
                     if 'восход' in name:
                         weather_data.sunrise = value
                     elif 'заход' in name:
@@ -91,21 +89,7 @@ async def fetch_weather_data() -> WeatherData:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
-@app.get("/", response_model=dict)
-async def root():
-    """
-    Корневой эндпоинт с информацией об API
-    """
-    return {
-        "name": "Ski Resort Weather API",
-        "endpoints": {
-            "/weather": "Get current weather data",
-            "/health": "Check API health"
-        }
-    }
-
-
-@app.get("/weather", response_model=WeatherData)
+@app.get("/", response_model=WeatherData)
 async def get_weather():
     """
     Получить текущие данные о погоде
@@ -122,25 +106,7 @@ async def health_check():
 
 
 if __name__ == "__main__":
-    import subprocess
-    import sys
-
-    host = "127.0.0.1"
-    port = 8000
-
-
-    def open_browser():
-        webbrowser.open(f'http://{host}:{port}/weather')
-
-
-    # Открываем браузер в отдельном потоке
-    Thread(target=open_browser).start()
-
-    # Запускаем сервер
-    subprocess.run([
-        sys.executable, "-m", "fastapi", "run",
-        "--host", host,
-        "--port", str(port),
-        "--app-dir", ".",
-        "--factory", "main:app"
-    ])
+    try:
+        uvicorn.run(app, host="0.0.0.0", port=8003)
+    except Exception as e:
+        print(f"Ошибка запуска парсера погоды: {e}")
